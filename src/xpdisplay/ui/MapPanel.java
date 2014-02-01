@@ -33,6 +33,7 @@ import xpdisplay.model.StateChangeListener;
 import xpdisplay.model.data.DataObject;
 import xpdisplay.model.data.OtherAircraftPosition;
 import xpdisplay.model.data.Position;
+import xpdisplay.model.data.Speed;
 import xpdisplay.ui.map.GoogleMapTileProvider;
 import xpdisplay.ui.map.GoogleTerrainTileProvider;
 import xpdisplay.ui.map.MicrosoftMapTileProvider;
@@ -57,25 +58,33 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
     private Float[] previousLongitudes = new Float[8];
     private Float[] previousAltitudes = new Float[8];
     
-    
-    
+    private Float vIndKts; // current indicated airspeed (kts)
+    private Float vTrueMph; // current true speed (mph)
+    // altitudes[0] is our current altitude (ft above msl)
+    private Float altAboveGround;
+    private Float indicatedAlt;
+
+    private Font overlayFont = new Font("Arial", Font.PLAIN, 20);
+
+    private Color trueSpeedColor = new Color(150,170,255);
+
     private Map<String, TileFactory> tileFactories = new TreeMap();
     
     public MapPanel() {
         initComponents();
-        
+
         map = new JXMapKit();
         add(BorderLayout.CENTER, map);
         
         tileFactories.put("OpenStreetMap (Map)", OpenStreetMapTileProvider.getDefaultTileFactory());
         tileFactories.put("Microsoft (Aerial)", MicrosoftMapTileProvider.getDefaultTileFactory());
-        tileFactories.put("Google (Map)", GoogleMapTileProvider.getDefaultTileFactory());
-        tileFactories.put("Google (Terrain)", GoogleTerrainTileProvider.getDefaultTileFactory());
+//        tileFactories.put("Google (Map)", GoogleMapTileProvider.getDefaultTileFactory());
+//        tileFactories.put("Google (Terrain)", GoogleTerrainTileProvider.getDefaultTileFactory());
         
         mapSourceDropdown.addItem("OpenStreetMap (Map)");
         mapSourceDropdown.addItem("Microsoft (Aerial)");
-        mapSourceDropdown.addItem("Google (Map)");
-        mapSourceDropdown.addItem("Google (Terrain)");
+//        mapSourceDropdown.addItem("Google (Map)");
+//        mapSourceDropdown.addItem("Google (Terrain)");
         
         mapSourceDropdown.addItemListener(new ItemListener() {
             public void itemStateChanged(ItemEvent evt) {        
@@ -137,11 +146,81 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
 
         public void paint(Graphics2D g, JXMapViewer map, int w, int h) {
             g = (Graphics2D) g.create();
+
             //convert from viewport to world bitmap
             Rectangle rect = map.getViewportBounds();
+
+            if( showOverlayCheckbox.isSelected() ) {
+                // draw vital values over map
+                g.setColor(new Color(0,0,0,128));
+                int boxWidth = (int)(rect.width * 0.78);
+                g.fillRoundRect(100,rect.height-50,boxWidth,40,10,10);
+
+                int textY = rect.height-50 + 27;
+                g.setColor(Color.WHITE);
+
+                Font tmp = g.getFont();
+                g.setFont(overlayFont);
+                FontMetrics fm = g.getFontMetrics();
+
+                // Show indicated Alt on left side
+                if( indicatedAlt != null ) {
+                    String s = ""+indicatedAlt.intValue()+" ft";
+                    int sw = fm.stringWidth(s);
+                    g.drawString(s, (int)(100.0 + (0.1 * (double)boxWidth) - sw/2), textY);
+                }
+
+                // Show airspeed in middle
+                if( showTrueSpeedCheckbox.isSelected() ) {
+                    if( vTrueMph != null ) {
+                        g.setColor(trueSpeedColor);
+                        String s = ""+vTrueMph.intValue()+" mph TAS";
+                        int sw = fm.stringWidth(s);
+                        g.drawString(s, (int)(100.0 + (0.5 * (double)boxWidth)) - sw/2, textY);
+                    }
+                } else {
+                    if( vIndKts != null ) {
+                        if( vIndKts.intValue() < 150 ) {
+                            g.setColor(Color.ORANGE);
+                        } else {
+                            g.setColor(Color.WHITE);
+                        }
+                        String s = ""+vIndKts.intValue()+" kts IAS";
+                        int sw = fm.stringWidth(s);
+                        g.drawString(s, (int)(100.0 + (0.5 * (double)boxWidth)) - sw/2, textY);
+                    }
+                }
+
+                // Show AGL on right side
+                if( altAboveGround != null ) {
+                    if( altAboveGround.intValue() < 2000 ) {
+                        g.setColor(Color.YELLOW);
+                    } else
+                    if( altAboveGround.intValue() < 1000 ) {
+                        g.setColor(Color.ORANGE);
+                    } else
+                    if( altAboveGround.intValue() < 500 ) {
+                        g.setColor(Color.RED);
+                    } else
+                    if( altAboveGround.intValue() < 100 ) {
+                        g.setColor(Color.PINK);
+                    } else {
+                        g.setColor(Color.WHITE);
+                    }
+                    String s = ""+altAboveGround.intValue()+" ft AGL";
+                    int sw = fm.stringWidth(s);
+                    g.drawString(s, (int)(100.0 + (0.88 * (double)boxWidth)) - sw/2, textY);
+                }
+
+                g.setFont(tmp);
+            }
+
+
             g.translate(-rect.x, -rect.y);
             
+
             for( Integer index : waypoints.keySet() ) {
+                if( index == 0 || showOthersCheckbox.isSelected() ) {
                 Waypoint wp = waypoints.get(index);
                 Point2D pt = map.getTileFactory().geoToPixel(wp.getPosition(), map.getZoom());
                 int x = (int)pt.getX();
@@ -164,12 +243,12 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
                 }
                 
                 
-                
+                    // thick black circle
                 g.setColor(Color.BLACK);
                 g.setStroke(new BasicStroke(3.0f));
                 g.drawOval(x-7,y-7,15,15);
 
-                
+                    // black centre point
                 g.setStroke(new BasicStroke(1.5f));
                 g.drawOval(x,y,1,1);
                 
@@ -179,6 +258,7 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
                     g.setColor(new Color(0,255,0));
                 }
                 
+                    // thinner green/white circle, over the top of the thick black circle painted earlier
                 g.drawOval(x-7,y-7,15,15);
                 
                 paintDetails(index, g, x+15, y-5);
@@ -189,8 +269,8 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
                 g.drawOval(x-7,y-7,15,15);
                 g.drawString(""+index,x-3,y+5);
  */
-                
-                
+                }
+
             }
             g.dispose();
         }
@@ -273,6 +353,9 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
         mapSourceDropdown = new javax.swing.JComboBox();
         showIdCheckbox = new javax.swing.JCheckBox();
         showAltCheckbox = new javax.swing.JCheckBox();
+        showOverlayCheckbox = new javax.swing.JCheckBox();
+        showOthersCheckbox = new javax.swing.JCheckBox();
+        showTrueSpeedCheckbox = new javax.swing.JCheckBox();
 
         setLayout(new java.awt.BorderLayout());
 
@@ -288,6 +371,21 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
         showAltCheckbox.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 0, 0));
         showAltCheckbox.setMargin(new java.awt.Insets(0, 0, 0, 0));
 
+        showOverlayCheckbox.setSelected(true);
+        showOverlayCheckbox.setText("Show Overlay");
+        showOverlayCheckbox.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        showOverlayCheckbox.setMargin(new java.awt.Insets(0, 0, 0, 0));
+
+        showOthersCheckbox.setSelected(true);
+        showOthersCheckbox.setText("Show Others");
+        showOthersCheckbox.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        showOthersCheckbox.setMargin(new java.awt.Insets(0, 0, 0, 0));
+
+        showTrueSpeedCheckbox.setSelected(false);
+        showTrueSpeedCheckbox.setText("True Speed");
+        showTrueSpeedCheckbox.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        showTrueSpeedCheckbox.setMargin(new java.awt.Insets(0, 0, 0, 0));
+
         javax.swing.GroupLayout controlPanelLayout = new javax.swing.GroupLayout(controlPanel);
         controlPanel.setLayout(controlPanelLayout);
         controlPanelLayout.setHorizontalGroup(
@@ -301,6 +399,12 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
                 .addComponent(showIdCheckbox)
                 .addGap(20, 20, 20)
                 .addComponent(showAltCheckbox)
+                .addGap(20, 20, 20)
+                .addComponent(showOverlayCheckbox)
+                .addGap(20, 20, 20)
+                .addComponent(showOthersCheckbox)
+                .addGap(20, 20, 20)
+                .addComponent(showTrueSpeedCheckbox)
                 .addContainerGap(127, Short.MAX_VALUE))
         );
         controlPanelLayout.setVerticalGroup(
@@ -311,7 +415,10 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
                     .addComponent(jLabel1)
                     .addComponent(mapSourceDropdown, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(showIdCheckbox)
-                    .addComponent(showAltCheckbox))
+                            .addComponent(showAltCheckbox)
+                            .addComponent(showOverlayCheckbox)
+                            .addComponent(showOthersCheckbox)
+                            .addComponent(showTrueSpeedCheckbox))
                 .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
         );
         add(controlPanel, java.awt.BorderLayout.NORTH);
@@ -325,6 +432,9 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
     private javax.swing.JComboBox mapSourceDropdown;
     private javax.swing.JCheckBox showAltCheckbox;
     private javax.swing.JCheckBox showIdCheckbox;
+    private javax.swing.JCheckBox showOverlayCheckbox;
+    private javax.swing.JCheckBox showOthersCheckbox;
+    private javax.swing.JCheckBox showTrueSpeedCheckbox;
     // End of variables declaration//GEN-END:variables
     
     
@@ -419,7 +529,9 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
         } else if( objectThatWasChanged instanceof Position ) {
             Position p = (Position) objectThatWasChanged;
             setMapLocation(p.getLatitude(), p.getLongitude());
-            
+            altAboveGround = p.getAltitudeInFeetAboveGroundLevel();
+            indicatedAlt = p.getAltitudeIndicated();
+
             int index = 0;
             Float oldLat = latitudes[index];
             Float oldLong = longitudes[index];
@@ -462,6 +574,10 @@ public class MapPanel extends javax.swing.JPanel implements StateChangeListener 
                 longitudes[index] = p.getLongitude();
                 altitudes[index] = p.getAltitudeInFeetAboveMeanSeaLevel();
             }
+        } else if( objectThatWasChanged instanceof Speed ) {
+            Speed s = (Speed) objectThatWasChanged;
+            vIndKts = s.getVIndKts();
+            vTrueMph = s.getVTrueMph();
         }
         map.repaint();
     }
